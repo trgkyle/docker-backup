@@ -1,11 +1,10 @@
 module github.com/muesli/docker-backup
 
-go 1.23.0
-
-toolchain go1.24.3
+go 1.22
 
 require (
 	github.com/docker/docker v26.1.5+incompatible
+	github.com/gogo/protobuf v1.3.2
 	github.com/kennygrant/sanitize v1.2.4
 	github.com/spf13/cobra v0.0.3
 )
