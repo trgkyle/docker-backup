@@ -9,9 +9,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
 	"github.com/spf13/cobra"
 )
 
@@ -111,41 +111,32 @@ func createContainer(backup Backup) (string, error) {
 	_, _, err := cli.ImageInspectWithRaw(ctx, backup.Config.Image)
 	if err != nil {
 		fmt.Println("Pulling Image:", backup.Config.Image)
-		_, err := cli.ImagePull(ctx, backup.Config.Image, types.ImagePullOptions{})
+		_, err := cli.ImagePull(ctx, backup.Config.Image, image.PullOptions{})
 		if err != nil {
 			return "", err
 		}
 	}
 	// io.Copy(os.Stdout, reader)
 
-	mounts := make([]mount.Mount, len(backup.Mounts))
-	for i, m := range backup.Mounts {
-		mounts[i] = mount.Mount{
-			Type:     m.Type,
-			Source:   m.Source,
-			Target:   m.Destination,
-			ReadOnly: !m.RW,
+	var nc *network.NetworkingConfig
+	if backup.NetworkSettings != nil {
+		ep := make(map[string]*network.EndpointSettings)
+		for k, v := range backup.NetworkSettings.Networks {
+			ep[k] = v
 		}
-		if m.Type == mount.TypeBind {
-			mounts[i].BindOptions = &mount.BindOptions{
-				Propagation: m.Propagation,
-			}
+		nc = &network.NetworkingConfig{
+			EndpointsConfig: ep,
 		}
 	}
 
-	resp, err := cli.ContainerCreate(ctx, backup.Config, &container.HostConfig{
-		PortBindings:  backup.PortMap,
-		NetworkMode:   backup.NetworkMode,
-		RestartPolicy: backup.RestartPolicy,
-		Mounts:        mounts,
-	}, nil, name)
+	resp, err := cli.ContainerCreate(ctx, backup.Config, backup.HostConfig, nc, nil, name)
 	if err != nil {
 		return "", err
 	}
 	fmt.Println("Created Container with ID:", resp.ID)
 
-	for _, m := range backup.Mounts {
-		fmt.Printf("Old Mount (type %s) %s -> %s\n", m.Type, m.Source, m.Destination)
+	for _, m := range backup.HostConfig.Mounts {
+		fmt.Printf("Old Mount (type %s) %s -> %s\n", m.Type, m.Source, m.Target)
 	}
 
 	conf, err := cli.ContainerInspect(ctx, resp.ID)
@@ -162,7 +153,7 @@ func createContainer(backup Backup) (string, error) {
 func startContainer(id string) error {
 	fmt.Println("Starting container:", id[:12])
 
-	err := cli.ContainerStart(ctx, id, types.ContainerStartOptions{})
+	err := cli.ContainerStart(ctx, id, container.StartOptions{})
 	if err != nil {
 		return err
 	}
@@ -177,7 +168,7 @@ func startContainer(id string) error {
 		case <-statusCh:
 		}
 
-		out, err := cli.ContainerLogs(ctx, id, types.ContainerLogsOptions{ShowStdout: true})
+		out, err := cli.ContainerLogs(ctx, id, container.LogsOptions{ShowStdout: true})
 		if err != nil {
 			return err
 		}

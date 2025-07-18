@@ -12,7 +12,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
+	"github.com/docker/docker/api/types/image"
 	"github.com/kennygrant/sanitize"
 	"github.com/spf13/cobra"
 )
@@ -20,12 +20,11 @@ import (
 // Backup is used to gather all of a container's metadata, so we can encode it
 // as JSON and store it
 type Backup struct {
-	Name          string
-	Config        *container.Config
-	PortMap       nat.PortMap
-	Mounts        []types.MountPoint
-	NetworkMode   container.NetworkMode
-	RestartPolicy container.RestartPolicy
+	Name            string
+	Config          *container.Config
+	HostConfig      *container.HostConfig
+	NetworkSettings *types.NetworkSettings
+	Platform        string
 }
 
 var (
@@ -95,7 +94,7 @@ func getFullImageName(imageName string) (string, error) {
 	}
 
 	// If the used image doesn't include tag information try to find one (if it exists).
-	images, err := cli.ImageList(ctx, types.ImageListOptions{})
+	images, err := cli.ImageList(ctx, image.ListOptions{})
 	if err != nil {
 		// Couldn't get image list, abort
 		return imageName, err
@@ -137,12 +136,11 @@ func backup(ID string) error {
 	}
 
 	backup := Backup{
-		Name:          conf.Name,
-		PortMap:       conf.HostConfig.PortBindings,
-		Config:        conf.Config,
-		Mounts:        conf.Mounts,
-		NetworkMode:   conf.HostConfig.NetworkMode,
-		RestartPolicy: conf.HostConfig.RestartPolicy,
+		Name:            conf.Name,
+		Config:          conf.Config,
+		HostConfig:      conf.HostConfig,
+		NetworkSettings: conf.NetworkSettings,
+		Platform:        conf.Platform,
 	}
 
 	filename := sanitize.Path(fmt.Sprintf("%s-%s", conf.Config.Image, ID))
@@ -197,7 +195,7 @@ func backup(ID string) error {
 }
 
 func backupAll() error {
-	containers, err := cli.ContainerList(ctx, types.ContainerListOptions{
+	containers, err := cli.ContainerList(ctx, container.ListOptions{
 		All: optStopped,
 	})
 	if err != nil {
