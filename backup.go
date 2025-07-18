@@ -4,13 +4,10 @@ import (
 	"archive/tar"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -23,10 +20,12 @@ import (
 // Backup is used to gather all of a container's metadata, so we can encode it
 // as JSON and store it
 type Backup struct {
-	Name    string
-	Config  *container.Config
-	PortMap nat.PortMap
-	Mounts  []types.MountPoint
+	Name          string
+	Config        *container.Config
+	PortMap       nat.PortMap
+	Mounts        []types.MountPoint
+	NetworkMode   container.NetworkMode
+	RestartPolicy container.RestartPolicy
 }
 
 var (
@@ -55,63 +54,6 @@ var (
 	}
 )
 
-func collectFile(path string, info os.FileInfo, err error) error {
-	if err != nil {
-		return err
-	}
-
-	if optVerbose {
-		fmt.Println("Adding", path)
-	}
-
-	paths = append(paths, path)
-	return nil
-}
-
-func collectFileTar(path string, info os.FileInfo, err error) error {
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSocket != 0 {
-		// ignore sockets
-		return nil
-	}
-
-	if optVerbose {
-		fmt.Println("Adding", path)
-	}
-
-	th, err := tar.FileInfoHeader(info, path)
-	if err != nil {
-		return err
-	}
-
-	th.Name = path
-	if si, ok := info.Sys().(*syscall.Stat_t); ok {
-		th.Uid = int(si.Uid)
-		th.Gid = int(si.Gid)
-	}
-
-	if err := tw.WriteHeader(th); err != nil {
-		return err
-	}
-
-	if !info.Mode().IsRegular() {
-		return nil
-	}
-	if info.Mode().IsDir() {
-		return nil
-	}
-
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-
-	_, err = io.Copy(tw, file)
-	return err
-}
-
 func backupTar(filename string, backup Backup) error {
 	b, err := json.MarshalIndent(backup, "", "  ")
 	if err != nil {
@@ -139,15 +81,6 @@ func backupTar(filename string, backup Backup) error {
 	}
 	if _, err := tw.Write(b); err != nil {
 		return err
-	}
-
-	for _, m := range backup.Mounts {
-		// fmt.Printf("Mount (type %s) %s -> %s\n", m.Type, m.Source, m.Destination)
-
-		err := filepath.Walk(m.Source, collectFileTar)
-		if err != nil {
-			return err
-		}
 	}
 
 	tw.Close()
@@ -204,10 +137,12 @@ func backup(ID string) error {
 	}
 
 	backup := Backup{
-		Name:    conf.Name,
-		PortMap: conf.HostConfig.PortBindings,
-		Config:  conf.Config,
-		Mounts:  conf.Mounts,
+		Name:          conf.Name,
+		PortMap:       conf.HostConfig.PortBindings,
+		Config:        conf.Config,
+		Mounts:        conf.Mounts,
+		NetworkMode:   conf.HostConfig.NetworkMode,
+		RestartPolicy: conf.HostConfig.RestartPolicy,
 	}
 
 	filename := sanitize.Path(fmt.Sprintf("%s-%s", conf.Config.Image, ID))
@@ -225,14 +160,6 @@ func backup(ID string) error {
 	err = ioutil.WriteFile(filename+".backup.json", b, 0600)
 	if err != nil {
 		return err
-	}
-
-	for _, m := range conf.Mounts {
-		// fmt.Printf("Mount (type %s) %s -> %s\n", m.Type, m.Source, m.Destination)
-		err := filepath.Walk(m.Source, collectFile)
-		if err != nil {
-			return err
-		}
 	}
 
 	filelist, err := os.Create(filename + ".backup.files")

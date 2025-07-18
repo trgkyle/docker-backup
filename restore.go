@@ -11,6 +11,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/spf13/cobra"
 )
 
@@ -74,68 +75,6 @@ func restoreTar(filename string) error {
 		return err
 	}
 
-	conf, err := cli.ContainerInspect(ctx, id)
-	if err != nil {
-		return err
-	}
-
-	tt := map[string]string{}
-	for _, oldPath := range backup.Mounts {
-		for _, hostPath := range conf.Mounts {
-			if oldPath.Destination == hostPath.Destination {
-				tt[oldPath.Source] = hostPath.Source
-				break
-			}
-		}
-	}
-
-	if _, err := tarfile.Seek(0, 0); err != nil {
-		return err
-	}
-	tr = tar.NewReader(tarfile)
-	for {
-		th, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		if th.Name == "container.json" {
-			continue
-		}
-
-		path := th.Name
-		fmt.Println("Restoring:", path)
-		for k, v := range tt {
-			if strings.HasPrefix(path, k) {
-				path = v + path[len(k):]
-			}
-		}
-
-		if th.Typeflag == tar.TypeDir {
-			if err := os.MkdirAll(path, os.FileMode(th.Mode)); err != nil {
-				return err
-			}
-		} else {
-			file, err := os.Create(path)
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(file, tr); err != nil {
-				return err
-			}
-			file.Close()
-		}
-		if err := os.Chmod(path, os.FileMode(th.Mode)); err != nil {
-			return err
-		}
-		if err := os.Chown(path, th.Uid, th.Gid); err != nil {
-			return err
-		}
-		fmt.Println("Created as:", path)
-	}
-
 	if optStart {
 		return startContainer(id)
 	}
@@ -168,7 +107,7 @@ func createContainer(backup Backup) (string, error) {
 	nameparts := strings.Split(backup.Name, "/")
 	name := nameparts[len(nameparts)-1]
 	fmt.Println("Restoring Container:", name)
-	
+
 	_, _, err := cli.ImageInspectWithRaw(ctx, backup.Config.Image)
 	if err != nil {
 		fmt.Println("Pulling Image:", backup.Config.Image)
@@ -179,8 +118,26 @@ func createContainer(backup Backup) (string, error) {
 	}
 	// io.Copy(os.Stdout, reader)
 
+	mounts := make([]mount.Mount, len(backup.Mounts))
+	for i, m := range backup.Mounts {
+		mounts[i] = mount.Mount{
+			Type:     m.Type,
+			Source:   m.Source,
+			Target:   m.Destination,
+			ReadOnly: !m.RW,
+		}
+		if m.Type == mount.TypeBind {
+			mounts[i].BindOptions = &mount.BindOptions{
+				Propagation: m.Propagation,
+			}
+		}
+	}
+
 	resp, err := cli.ContainerCreate(ctx, backup.Config, &container.HostConfig{
-		PortBindings: backup.PortMap,
+		PortBindings:  backup.PortMap,
+		NetworkMode:   backup.NetworkMode,
+		RestartPolicy: backup.RestartPolicy,
+		Mounts:        mounts,
 	}, nil, name)
 	if err != nil {
 		return "", err
