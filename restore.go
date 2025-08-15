@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/spf13/cobra"
 )
@@ -32,7 +31,7 @@ var (
 				return restoreTar(args[0])
 			}
 
-			return fmt.Errorf("Unknown file type, please provide a .tar or .json file")
+			return fmt.Errorf("unknown file type, please provide a .tar or .json file")
 		},
 	}
 )
@@ -108,31 +107,37 @@ func createContainer(backup Backup) (string, error) {
 	name := nameparts[len(nameparts)-1]
 	fmt.Println("Restoring Container:", name)
 
-	_, _, err := cli.ImageInspectWithRaw(ctx, backup.Config.Image)
-	if err != nil {
-		fmt.Println("Pulling Image:", backup.Config.Image)
-		_, err := cli.ImagePull(ctx, backup.Config.Image, image.PullOptions{})
-		if err != nil {
-			return "", err
-		}
-	}
-	// io.Copy(os.Stdout, reader)
+	// Create container configuration
+	config := backup.Config
 
-	var nc *network.NetworkingConfig
+	// Create host configuration
+	hostConfig := backup.HostConfig
+
+	// Get network configuration
+	var networkConfig *network.NetworkingConfig
 	if backup.NetworkSettings != nil {
 		ep := make(map[string]*network.EndpointSettings)
 		for k, v := range backup.NetworkSettings.Networks {
 			ep[k] = v
 		}
-		nc = &network.NetworkingConfig{
+		networkConfig = &network.NetworkingConfig{
 			EndpointsConfig: ep,
 		}
 	}
 
-	resp, err := cli.ContainerCreate(ctx, backup.Config, backup.HostConfig, nc, nil, name)
+	// Create the container
+	resp, err := cli.ContainerCreate(
+		ctx,
+		config,
+		hostConfig,
+		networkConfig,
+		nil,
+		name,
+	)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to create container: %v", err)
 	}
+
 	fmt.Println("Created Container with ID:", resp.ID)
 
 	for _, m := range backup.HostConfig.Mounts {
